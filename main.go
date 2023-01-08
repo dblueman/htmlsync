@@ -12,14 +12,43 @@ import (
 )
 
 type HTMLFile struct {
-   file *os.File
-   tree *html.Node
+   file     *os.File
+   tree     *html.Node
+   modified bool
+}
+
+type Section struct {
+   highest int
+   nodes   []*html.Node
 }
 
 var (
+   reformat  = flag.Bool("reformat", false, "reformat HTML files")
    htmlfiles []HTMLFile
-   reformat = flag.Bool("reformat", false, "reformat HTML files")
+   sections  map[string]Section // stored by id
 )
+
+func search(node *html.Node) {
+   if node.Type == html.ElementNode && node.Data == "section" {
+      for _, attr := range(node.Attr) {
+         switch attr.Key {
+         case "id":
+            fmt.Printf("section id '%s'\n", attr.Val)
+         case "data-xweb":
+            fmt.Printf("data-xweb '%s'\n", attr.Val)
+         }
+      }
+   }
+
+   for child := node.FirstChild; child != nil; child = child.NextSibling {
+		search(child)
+	}
+}
+
+func (htmlfile *HTMLFile) search() error {
+   search(htmlfile.tree)
+   return nil
+}
 
 func parse(path string) error {
    var htmlfile HTMLFile
@@ -83,6 +112,15 @@ func top() error {
          if err != nil {
             return fmt.Errorf("top: %w", err)
          }
+      }
+
+      return nil
+   }
+
+   for _, htmlfile := range(htmlfiles) {
+      err = htmlfile.search()
+      if err != nil {
+         return fmt.Errorf("top: %w", err)
       }
    }
 
