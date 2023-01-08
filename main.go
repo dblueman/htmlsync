@@ -6,6 +6,8 @@ import (
    "io"
    "os"
    "path/filepath"
+   "regexp"
+   "strconv"
    "strings"
 
    "golang.org/x/net/html"
@@ -18,35 +20,73 @@ type HTMLFile struct {
 }
 
 type Section struct {
-   highest int
-   nodes   []*html.Node
+   highestRev  int
+   highestNode *html.Node
+   nodes       []*html.Node
 }
 
 var (
    reformat  = flag.Bool("reformat", false, "reformat HTML files")
    htmlfiles []HTMLFile
-   sections  map[string]Section // stored by id
+   sections  = map[string]*Section{} // stored by id
+   revRe     = regexp.MustCompile(`^r\d+$`)
 )
 
-func search(node *html.Node) {
+func getRev(name string) int {
+   match := revRe.MatchString(name)
+   if !match {
+      fmt.Fprintf(os.Stderr, "error: malformed data-xweb value '%s'; should be eg 'r7'\n", name)
+      os.Exit(1)
+   }
+
+   val, err := strconv.Atoi(name[1:])
+   if err != nil {
+      panic(err)
+   }
+
+   return val
+}
+
+func build(node *html.Node) {
    if node.Type == html.ElementNode && node.Data == "section" {
+      var id string
+      var rev int
+
       for _, attr := range(node.Attr) {
          switch attr.Key {
          case "id":
-            fmt.Printf("section id '%s'\n", attr.Val)
+            id = attr.Val
+//            fmt.Printf("section id '%s'\n", attr.Val)
          case "data-xweb":
-            fmt.Printf("data-xweb '%s'\n", attr.Val)
+            rev = getRev(attr.Val)
+//            fmt.Printf("data-xweb '%s'\n", attr.Val)
+         }
+      }
+
+      section, ok := sections[id]
+      if ok {
+         if rev > section.highestRev {
+            section.highestRev = rev
+            section.highestNode = node
+         }
+
+         section.nodes = append(section.nodes, node)
+      } else {
+         sections[id] = &Section{
+            highestRev:  rev,
+            highestNode: node,
+            nodes:       []*html.Node{node},
          }
       }
    }
 
    for child := node.FirstChild; child != nil; child = child.NextSibling {
-		search(child)
+		build(child)
 	}
 }
 
-func (htmlfile *HTMLFile) search() error {
-   search(htmlfile.tree)
+func (htmlfile *HTMLFile) build() error {
+   build(htmlfile.tree)
    return nil
 }
 
@@ -118,10 +158,14 @@ func top() error {
    }
 
    for _, htmlfile := range(htmlfiles) {
-      err = htmlfile.search()
+      err = htmlfile.build()
       if err != nil {
          return fmt.Errorf("top: %w", err)
       }
+   }
+
+   for id, section := range(sections) {
+      fmt.Printf("section '%s', highestRev %d, %d nodes\n", id, section.highestRev, len(section.nodes))
    }
 
    return err
