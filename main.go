@@ -6,7 +6,6 @@ import (
    "io"
    "os"
    "path/filepath"
-   "regexp"
    "strconv"
    "strings"
 
@@ -14,40 +13,54 @@ import (
 )
 
 type HTMLFile struct {
+   name     string
    file     *os.File
    tree     *html.Node
    modified bool
 }
 
+type HTMLNode struct {
+   htmlfile *HTMLFile
+   node     *html.Node
+}
+
 type Section struct {
    highestRev  int
    highestNode *html.Node
-   nodes       []*html.Node
+   htmlnodes   []*HTMLNode
 }
+
+const (
+   CustomAttr = "data-revision"
+)
 
 var (
    reformat  = flag.Bool("reformat", false, "reformat HTML files")
    htmlfiles []HTMLFile
    sections  = map[string]*Section{} // stored by id
-   revRe     = regexp.MustCompile(`^r\d+$`)
 )
 
-func getRev(name string) int {
-   match := revRe.MatchString(name)
-   if !match {
-      fmt.Fprintf(os.Stderr, "error: malformed data-xweb value '%s'; should be eg 'r7'\n", name)
-      os.Exit(1)
+func (dst *HTMLNode) update(src *Section) {
+   dst.htmlfile.modified = true
+
+   dst.node.FirstChild = src.highestNode.FirstChild
+   dst.node.LastChild = src.highestNode.LastChild
+
+   for _, attr := range(dst.node.Attr) {
+      if attr.Key == CustomAttr {
+         attr.Val = strconv.Itoa(src.highestRev)
+         return
+      }
    }
 
-   val, err := strconv.Atoi(name[1:])
-   if err != nil {
-      panic(err)
-   }
-
-   return val
+   // wasn't found; add
+   dst.node.Attr = append(dst.node.Attr, html.Attribute{
+      Key: CustomAttr,
+      Val: strconv.Itoa(src.highestRev),
+   })
 }
 
-func build(node *html.Node) {
+func build(htmlfile *HTMLFile, node *html.Node) {
    if node.Type == html.ElementNode && node.Data == "section" {
       var id string
       var rev int
@@ -57,9 +70,14 @@ func build(node *html.Node) {
          case "id":
             id = attr.Val
 //            fmt.Printf("section id '%s'\n", attr.Val)
-         case "data-xweb":
-            rev = getRev(attr.Val)
-//            fmt.Printf("data-xweb '%s'\n", attr.Val)
+         case CustomAttr:
+            var err error
+            rev, err = strconv.Atoi(attr.Val)
+            if err != nil {
+               fmt.Fprintf(os.Stderr, "error: malformed %s value '%s'; should be eg 'r7'\n", CustomAttr, attr.Val)
+               os.Exit(1)
+            }
+//            fmt.Printf("%s '%s'\n", CustomAttr, attr.Val)
          }
       }
 
@@ -70,28 +88,34 @@ func build(node *html.Node) {
             section.highestNode = node
          }
 
-         section.nodes = append(section.nodes, node)
+         section.htmlnodes = append(section.htmlnodes, &HTMLNode{
+            htmlfile: htmlfile,
+            node:     node,
+         })
       } else {
          sections[id] = &Section{
             highestRev:  rev,
             highestNode: node,
-            nodes:       []*html.Node{node},
+            htmlnodes:   []*HTMLNode{
+               &HTMLNode{
+                  htmlfile: htmlfile,
+                  node:     node,
+               },
+            },
          }
       }
    }
 
    for child := node.FirstChild; child != nil; child = child.NextSibling {
-		build(child)
+		build(htmlfile, child)
 	}
 }
 
-func (htmlfile *HTMLFile) build() error {
-   build(htmlfile.tree)
-   return nil
-}
-
 func parse(path string) error {
-   var htmlfile HTMLFile
+   htmlfile := HTMLFile{
+      name: path,
+   }
+
    var err error
 
    htmlfile.file, err = os.OpenFile(path, os.O_RDWR, 0o644)
@@ -157,15 +181,45 @@ func top() error {
       return nil
    }
 
-   for _, htmlfile := range(htmlfiles) {
-      err = htmlfile.build()
-      if err != nil {
-         return fmt.Errorf("top: %w", err)
-      }
+   // avoid loop variable aliasing
+   for i := range(htmlfiles) {
+      build(&htmlfiles[i], htmlfiles[i].tree)
    }
 
    for id, section := range(sections) {
-      fmt.Printf("section '%s', highestRev %d, %d nodes\n", id, section.highestRev, len(section.nodes))
+      if section.highestRev == 0 {
+         continue
+      }
+
+      fmt.Printf("found %d '%s' sections; latest revision %d\n", len(section.htmlnodes), id, section.highestRev)
+
+      for _, htmlnode := range(section.htmlnodes) {
+         if htmlnode.node == section.highestNode {
+            continue
+         }
+
+         htmlnode.update(section)
+      }
+   }
+
+   var wrote []string
+
+   // rerender modified files
+   for _, htmlfile := range(htmlfiles) {
+      if !htmlfile.modified {
+         continue
+      }
+
+      err = htmlfile.render()
+      if err != nil {
+         return fmt.Errorf("top: %w", err)
+      }
+
+      wrote = append(wrote, htmlfile.name)
+   }
+
+   if len(wrote) > 0 {
+      fmt.Printf("updated: %s\n", strings.Join(wrote, " "))
    }
 
    return err

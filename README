@@ -1,6 +1,6 @@
 WORKFLOW
 - human identifies HTML <section> ... </section> block to templatise
-- adds data-xweb="r0" attribute
+- adds data-revision="5" attribute
 - runs "xweb", which:
  > in all HTML files recursively, identifies all sections with matching id
  > determines highest revision number, erroring out if multiple
@@ -33,3 +33,7 @@ IMPLEMENTATION
 
 - for each file struct:
  > if writeback set, rerender to file
+
+TODO
+- fix updates when no changes
+- when adding new "data-revision" attribute, add at same position
