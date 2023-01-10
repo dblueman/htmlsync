@@ -26,6 +26,7 @@ type HTMLNode struct {
 
 type Section struct {
    highestRev  int
+   highestPos  int
    highestNode *html.Node
    htmlnodes   []*HTMLNode
 }
@@ -53,23 +54,31 @@ func (dst *HTMLNode) update(src *Section) {
       }
    }
 
+   if src.highestPos >= len(dst.node.Attr) {
+      dst.node.Attr = append(dst.node.Attr, html.Attribute{
+         Key: CustomAttr,
+         Val: strconv.Itoa(src.highestRev),
+      })
+      return
+   }
+
    // wasn't found; add
-   dst.node.Attr = append(dst.node.Attr, html.Attribute{
+   dst.node.Attr = append(dst.node.Attr[:src.highestPos+1], dst.node.Attr[src.highestPos:]...)
+   dst.node.Attr[src.highestPos] = html.Attribute{
       Key: CustomAttr,
       Val: strconv.Itoa(src.highestRev),
-   })
+   }
 }
 
 func build(htmlfile *HTMLFile, node *html.Node) {
    if node.Type == html.ElementNode && node.Data == "section" {
       var id string
-      var rev int
+      var rev, pos int
 
-      for _, attr := range(node.Attr) {
+      for i, attr := range(node.Attr) {
          switch attr.Key {
          case "id":
             id = attr.Val
-//            fmt.Printf("section id '%s'\n", attr.Val)
          case CustomAttr:
             var err error
             rev, err = strconv.Atoi(attr.Val)
@@ -77,7 +86,7 @@ func build(htmlfile *HTMLFile, node *html.Node) {
                fmt.Fprintf(os.Stderr, "error: malformed %s value '%s'; should be eg 'r7'\n", CustomAttr, attr.Val)
                os.Exit(1)
             }
-//            fmt.Printf("%s '%s'\n", CustomAttr, attr.Val)
+            pos = i
          }
       }
 
@@ -85,6 +94,7 @@ func build(htmlfile *HTMLFile, node *html.Node) {
       if ok {
          if rev > section.highestRev {
             section.highestRev = rev
+            section.highestPos = pos
             section.highestNode = node
          }
 
@@ -95,6 +105,7 @@ func build(htmlfile *HTMLFile, node *html.Node) {
       } else {
          sections[id] = &Section{
             highestRev:  rev,
+            highestPos:  pos,
             highestNode: node,
             htmlnodes:   []*HTMLNode{
                &HTMLNode{

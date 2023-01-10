@@ -36,4 +36,4 @@ IMPLEMENTATION
 
 TODO
 - fix updates when no changes
-- when adding new "data-revision" attribute, add at same position
+- copy while element, not just content?
