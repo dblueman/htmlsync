@@ -39,7 +39,12 @@ const (
 var (
    reformat  = flag.Bool("reformat", false, "reformat HTML files")
    htmlfiles []HTMLFile
-   sections  = map[string]*Section{} // stored by id
+   sections  = map[string]*Section{} // stored by element:id
+   elements  = map[string]struct{}{
+      "section": struct{}{},
+      "header" : struct{}{},
+      "footer" : struct{}{},
+   }
 )
 
 func (dst *HTMLNode) update(src *Section) {
@@ -51,14 +56,17 @@ func (dst *HTMLNode) update(src *Section) {
 }
 
 func build(htmlfile *HTMLFile, node *html.Node) {
-   if node.Type == html.ElementNode && node.Data == "section" {
-      var id string
+   // check if interesting element
+   _, ok := elements[node.Data]
+
+   if node.Type == html.ElementNode && ok {
+      name := node.Data
       var rev, pos int
 
       for i, attr := range(node.Attr) {
          switch attr.Key {
          case "id":
-            id = attr.Val
+            name += ":" + attr.Val
          case CustomAttr:
             var err error
             rev, err = strconv.Atoi(attr.Val)
@@ -70,7 +78,7 @@ func build(htmlfile *HTMLFile, node *html.Node) {
          }
       }
 
-      section, ok := sections[id]
+      section, ok := sections[name]
       if ok {
          if rev > section.highestRev {
             section.highestRev = rev
@@ -84,7 +92,7 @@ func build(htmlfile *HTMLFile, node *html.Node) {
             rev:      rev,
          })
       } else {
-         sections[id] = &Section{
+         sections[name] = &Section{
             highestRev:  rev,
             highestPos:  pos,
             highestNode: node,
