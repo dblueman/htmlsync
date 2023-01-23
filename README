@@ -35,5 +35,6 @@ IMPLEMENTATION
  > if writeback set, rerender to file
 
 TODO
-- fix updates when no changes
-- copy while element, not just content?
+- initial setup mode
+ > warn for unannotated sections
+- include header and footer

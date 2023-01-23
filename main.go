@@ -22,6 +22,7 @@ type HTMLFile struct {
 type HTMLNode struct {
    htmlfile *HTMLFile
    node     *html.Node
+   rev      int
 }
 
 type Section struct {
@@ -46,28 +47,7 @@ func (dst *HTMLNode) update(src *Section) {
 
    dst.node.FirstChild = src.highestNode.FirstChild
    dst.node.LastChild = src.highestNode.LastChild
-
-   for _, attr := range(dst.node.Attr) {
-      if attr.Key == CustomAttr {
-         attr.Val = strconv.Itoa(src.highestRev)
-         return
-      }
-   }
-
-   if src.highestPos >= len(dst.node.Attr) {
-      dst.node.Attr = append(dst.node.Attr, html.Attribute{
-         Key: CustomAttr,
-         Val: strconv.Itoa(src.highestRev),
-      })
-      return
-   }
-
-   // wasn't found; add
-   dst.node.Attr = append(dst.node.Attr[:src.highestPos+1], dst.node.Attr[src.highestPos:]...)
-   dst.node.Attr[src.highestPos] = html.Attribute{
-      Key: CustomAttr,
-      Val: strconv.Itoa(src.highestRev),
-   }
+   dst.node.Attr = src.highestNode.Attr
 }
 
 func build(htmlfile *HTMLFile, node *html.Node) {
@@ -101,6 +81,7 @@ func build(htmlfile *HTMLFile, node *html.Node) {
          section.htmlnodes = append(section.htmlnodes, &HTMLNode{
             htmlfile: htmlfile,
             node:     node,
+            rev:      rev,
          })
       } else {
          sections[id] = &Section{
@@ -205,7 +186,13 @@ func top() error {
       fmt.Printf("found %d '%s' sections; latest revision %d\n", len(section.htmlnodes), id, section.highestRev)
 
       for _, htmlnode := range(section.htmlnodes) {
+         // skip self
          if htmlnode.node == section.highestNode {
+            continue
+         }
+
+         // skip uptodate sections
+         if htmlnode.rev == section.highestRev {
             continue
          }
 
