@@ -21,13 +21,6 @@ type HTMLFile struct {
    modified bool
 }
 
-/*type HTMLNode struct {
-   htmlfile *HTMLFile
-   node     *html.Node
-   hash     uint64
-   rev      int
-}*/
-
 type Section struct {
    id       string
    oldhash  uint64
@@ -48,7 +41,6 @@ var (
       "header" : struct{}{},
       "footer" : struct{}{},
    }
-   sectionsAll = []*Section{}
    sectionsByHash = map[uint64][]*Section{}
    sectionsById   = map[string][]*Section{}
 )
@@ -147,6 +139,11 @@ func build(htmlfile *HTMLFile, node *html.Node) error {
          return fmt.Errorf("build: %w", err)
       }
 
+      // must update hash
+      if newhash != oldhash {
+         htmlfile.modified = true
+      }
+
       section := Section{
          id,
          oldhash,
@@ -155,8 +152,6 @@ func build(htmlfile *HTMLFile, node *html.Node) error {
          htmlfile,
       }
 
-      sectionsAll = append(sectionsAll, &section)
-
       sections := sectionsByHash[newhash]
       sections = append(sections, &section)
       sectionsByHash[oldhash] = sections
@@ -164,52 +159,6 @@ func build(htmlfile *HTMLFile, node *html.Node) error {
       sections = sectionsById[id]
       sections = append(sections, &section)
       sectionsById[id] = sections
-
-/*      // previous code
-      name := node.Data
-      var rev, pos int
-
-      for i, attr := range(node.Attr) {
-         switch attr.Key {
-         case "id":
-            name += ":" + attr.Val
-         case HashAttr:
-            var err error
-            rev, err = strconv.Atoi(attr.Val)
-            if err != nil {
-               fmt.Fprintf(os.Stderr, "error: malformed %s value '%s'\n", HashAttr, attr.Val)
-               os.Exit(1)
-            }
-            pos = i
-         }
-      }
-
-      section, ok := sections[name]
-      if ok {
-         if rev > section.highestRev {
-            section.highestRev = rev
-            section.highestPos = pos
-            section.highestNode = node
-         }
-
-         section.htmlnodes = append(section.htmlnodes, &HTMLNode{
-            htmlfile: htmlfile,
-            node:     node,
-            rev:      rev,
-         })
-      } else {
-         sections[name] = &Section{
-            highestRev:  rev,
-            highestPos:  pos,
-            highestNode: node,
-            htmlnodes:   []*HTMLNode{
-               &HTMLNode{
-                  htmlfile: htmlfile,
-                  node:     node,
-               },
-            },
-         }
-      }*/
    }
 
    for child := node.FirstChild; child != nil; child = child.NextSibling {
@@ -324,28 +273,6 @@ func rerender() error {
 }
 
 func reformat() {
-/* for id, section := range(sections) {
-   if section.highestRev == 0 {
-      continue
-   }
-
-   fmt.Printf("found %d '%s' sections; latest revision %d\n", len(section.htmlnodes), id, section.highestRev)
-
-   for _, htmlnode := range(section.htmlnodes) {
-      // skip self
-      if htmlnode.node == section.highestNode {
-         continue
-      }
-
-      // skip uptodate sections
-      if htmlnode.rev == section.highestRev {
-         continue
-      }
-
-      htmlnode.update(section)
-   }
-}*/
-
    // sections with same hash are updated with the same id
    for _, sections := range(sectionsByHash) {
       var shortestId string
@@ -390,20 +317,26 @@ func mirror() error {
          }
       }
 
+      if len(changed) == 0 {
+         continue
+      }
+
       if len(changed) > 1 {
-         for i, section := range(sections) {
-            fmt.Printf("changed '%s' section %d/%d:\n", id, i, len(changed))
+         for i, section := range(changed) {
+            fmt.Printf("-- changed '%s' section %d/%d ------------\n\n", id, i, len(changed)-1)
             err := html.Render(os.Stdout, section.htmlnode)
             if err != nil {
                return fmt.Errorf("mirror: %w", err)
             }
+
+            fmt.Println("\n")
          }
 
 again:
-         fmt.Printf("which section should be used? [1-%d]", len(changed))
+         fmt.Printf("-- which section 0-%d should be used? ", len(changed)-1)
          var selection int
          n, err := fmt.Fscanf(os.Stdin, "%d", &selection)
-         if n != 1 || err != nil {
+         if n != 1 || err != nil || selection < 0 || selection > (len(changed)-1) {
             goto again
          }
 
@@ -431,11 +364,6 @@ func main() {
    if err != nil {
       fmt.Fprintf(os.Stderr, "%v\n", err)
       os.Exit(1)
-   }
-
-   // debug
-   for _, section := range(sectionsAll) {
-      fmt.Printf("%+v\n", *section)
    }
 
    if *reformatFlag {
