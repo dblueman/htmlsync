@@ -3,6 +3,7 @@ package main
 import (
    "flag"
    "fmt"
+   "hash/fnv"
    "io"
    "os"
    "path/filepath"
@@ -22,9 +23,11 @@ type HTMLFile struct {
 type HTMLNode struct {
    htmlfile *HTMLFile
    node     *html.Node
+   hash     uint64
    rev      int
 }
 
+// named by HTML 'id' field
 type Section struct {
    highestRev  int
    highestPos  int
@@ -45,6 +48,9 @@ var (
       "header" : struct{}{},
       "footer" : struct{}{},
    }
+
+   // new
+   hashed map[uint64]*html.Node
 )
 
 func (dst *HTMLNode) update(src *Section) {
@@ -55,11 +61,36 @@ func (dst *HTMLNode) update(src *Section) {
    dst.node.Attr = src.highestNode.Attr
 }
 
+func hash(node *html.Node) (uint64, error) {
+   h := fnv.New64a()
+   err := html.Render(h, node)
+   if err != nil {
+      return 0, fmt.Errorf("hash: %w", err)
+   }
+
+   return h.Sum64(), nil
+}
+
 func build(htmlfile *HTMLFile, node *html.Node) {
    // check if interesting element
    _, ok := elements[node.Data]
 
    if node.Type == html.ElementNode && ok {
+      // hash HTML node and store by hash
+      h, err := hash(node)
+      if err != nil {
+         fmt.Fprintf(os.Stderr, "error: %v\n", err)
+         os.Exit(1)
+      }
+
+      _, ok := hashed[h]
+      if ok {
+         fmt.Println("present")
+      }
+
+      hashed[h] = node
+
+      // previous code
       name := node.Data
       var rev, pos int
 
@@ -71,7 +102,7 @@ func build(htmlfile *HTMLFile, node *html.Node) {
             var err error
             rev, err = strconv.Atoi(attr.Val)
             if err != nil {
-               fmt.Fprintf(os.Stderr, "error: malformed %s value '%s'; should be eg 'r7'\n", CustomAttr, attr.Val)
+               fmt.Fprintf(os.Stderr, "error: malformed %s value '%s'\n", CustomAttr, attr.Val)
                os.Exit(1)
             }
             pos = i

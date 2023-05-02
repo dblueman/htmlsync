@@ -1,11 +1,18 @@
 WORKFLOW
-- human identifies HTML <section> ... </section> block to templatise
-- adds data-revision="5" attribute
-- runs "xweb", which:
- > in all HTML files recursively, identifies all sections with matching id
- > determines highest revision number, erroring out if multiple
- > replaces all sections with matching id, updating latest data-xweb attribute
- > prints how many section ids updated
+- user runs xweb first with '--init' flag
+ > it traverses all HTML files recursively, identifying HTML section, header and footer elements ('sections')
+ > it reflows all HTML
+ > builds a list of sections
+ > sections which are identical are updated with the same id
+ > sections which are different are given a unique id
+ > a list of sections ids is shown across all files
+ > a data-hash attrbute is added to each
+
+- user updates sections in HTML and runs 'xweb' to update all sections
+ > it traverses all HTML files recursively, identifying HTML section elements
+ > HTML sections are compared against data-hash attribute
+ > if more than one updated per id, it asks which one is master
+ > all mismatching sections are updated and files written back
 
 IMPLEMENTATION
 - per-file struct has:
@@ -36,4 +43,7 @@ IMPLEMENTATION
 
 TODO
 - initial setup mode
- > warn for unannotated sections
+ > parse all files, looking for section HTML element
+   - remove id attribute
+   - perform deep hash
+   - store in map by hash, including id
