@@ -5,6 +5,7 @@ import (
    "fmt"
    "hash/fnv"
    "io"
+   "math/rand"
    "os"
    "path/filepath"
    "strconv"
@@ -20,19 +21,19 @@ type HTMLFile struct {
    modified bool
 }
 
-type HTMLNode struct {
+/*type HTMLNode struct {
    htmlfile *HTMLFile
    node     *html.Node
    hash     uint64
    rev      int
-}
+}*/
 
-// named by HTML 'id' field
 type Section struct {
-   highestRev  int
-   highestPos  int
-   highestNode *html.Node
-   htmlnodes   []*HTMLNode
+   id       string
+   oldhash  uint64
+   newhash  uint64
+   htmlnode *html.Node
+   htmlfile *HTMLFile
 }
 
 const (
@@ -40,25 +41,24 @@ const (
 )
 
 var (
-   reformat  = flag.Bool("reformat", false, "reformat HTML files")
-   htmlfiles []HTMLFile
-   sections  = map[string]*Section{} // stored by element:id
+   reformatFlag = flag.Bool("reformat", false, "reformat HTML files")
+   htmlfiles = []*HTMLFile{}
    elements  = map[string]struct{}{
       "section": struct{}{},
       "header" : struct{}{},
       "footer" : struct{}{},
    }
-
-   byhash = map[uint64]*html.Node{}
-   byid   = map[string]*html.Node{}
+   sectionsAll = []*Section{}
+   sectionsByHash = map[uint64][]*Section{}
+   sectionsById   = map[string][]*Section{}
 )
 
-func (dst *HTMLNode) update(src *Section) {
+func (dst *Section) update(src *Section) {
    dst.htmlfile.modified = true
 
-   dst.node.FirstChild = src.highestNode.FirstChild
-   dst.node.LastChild = src.highestNode.LastChild
-   dst.node.Attr = src.highestNode.Attr
+   dst.htmlnode.FirstChild = src.htmlnode.FirstChild
+   dst.htmlnode.LastChild = src.htmlnode.LastChild
+   dst.htmlnode.Attr = src.htmlnode.Attr
 }
 
 // needed before computing hash
@@ -87,54 +87,85 @@ func hashGetRemove(node *html.Node) (string, uint64, error) {
    return id, hash, nil
 }
 
-func hashUpdateChanged(node *html.Node) (bool, error) {
-   id, oldhash, err := hashGetRemove(node)
-   if err != nil {
-      return false, fmt.Errorf("hashAdd: %w", err)
-   }
-
+// hash and id must be removed previously
+func hashGetAdd(node *html.Node, id string) (uint64, error) {
    h := fnv.New64a()
-   err = html.Render(h, node)
+   err := html.Render(h, node)
    if err != nil {
-      return false, fmt.Errorf("hash: %w", err)
+      return 0, fmt.Errorf("hash: %w", err)
    }
 
-   newhash := h.Sum64()
+   hash := h.Sum64()
    node.Attr = append(node.Attr,
       html.Attribute{
          Key: "id",
          Val: id,
       },
-   )
-   node.Attr = append(node.Attr,
       html.Attribute{
          Key: HashAttr,
-         Val: strconv.FormatUint(newhash, 16),
+         Val: strconv.FormatUint(hash, 16),
       },
    )
 
-   return newhash != oldhash, nil
+   return hash, nil
+}
+
+func (s *Section) setId(id string) {
+   s.id = id
+   s.htmlfile.modified = true
+
+   for _, attr := range(s.htmlnode.Attr) {
+      if attr.Key == "id" {
+         attr.Val = id
+         return
+      }
+   }
+
+   // doesn't exist; add
+   s.htmlnode.Attr = append(s.htmlnode.Attr, html.Attribute{
+      Key: "id",
+      Val: id,
+   })
 }
 
 func build(htmlfile *HTMLFile, node *html.Node) error {
+   // add to HMTLfile list for dirtying
+   htmlfiles = append(htmlfiles, htmlfile)
+
    // check if interesting element
    _, ok := elements[node.Data]
 
    if node.Type == html.ElementNode && ok {
       // hash HTML node and store by hash
-      _, h, err := hashGetRemove(node) // FIXME
+      id, oldhash, err := hashGetRemove(node)
       if err != nil {
          return fmt.Errorf("build: %w", err)
       }
 
-      _, ok := byhash[h]
-      if ok {
-         fmt.Println("present")
+      newhash, err := hashGetAdd(node, id)
+      if err != nil {
+         return fmt.Errorf("build: %w", err)
       }
 
-      byhash[h] = node
+      section := Section{
+         id,
+         oldhash,
+         newhash,
+         node,
+         htmlfile,
+      }
 
-      // previous code
+      sectionsAll = append(sectionsAll, &section)
+
+      sections := sectionsByHash[newhash]
+      sections = append(sections, &section)
+      sectionsByHash[oldhash] = sections
+
+      sections = sectionsById[id]
+      sections = append(sections, &section)
+      sectionsById[id] = sections
+
+/*      // previous code
       name := node.Data
       var rev, pos int
 
@@ -178,7 +209,7 @@ func build(htmlfile *HTMLFile, node *html.Node) error {
                },
             },
          }
-      }
+      }*/
    }
 
    for child := node.FirstChild; child != nil; child = child.NextSibling {
@@ -208,7 +239,7 @@ func parse(path string) error {
       return fmt.Errorf("parse: %w", err)
    }
 
-   htmlfiles = append(htmlfiles, htmlfile)
+   htmlfiles = append(htmlfiles, &htmlfile)
    return nil
 }
 
@@ -228,6 +259,7 @@ func (htmlfile *HTMLFile) render() error {
       return fmt.Errorf("render: %w", err)
    }
 
+   htmlfile.modified = false
    return nil
 }
 
@@ -235,7 +267,7 @@ func recurse() error {
    err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
       if err != nil {
          fmt.Fprintf(os.Stderr, "warning: unable to open %s", path)
-         return fmt.Errorf("recurse: %w:", err)
+         return fmt.Errorf("recurse: %w", err)
       }
 
       if !strings.HasSuffix(path, ".html") {
@@ -252,7 +284,7 @@ func recurse() error {
 
    // avoid loop variable aliasing
    for i := range(htmlfiles) {
-      err = build(&htmlfiles[i], htmlfiles[i].tree)
+      err = build(htmlfiles[i], htmlfiles[i].tree)
       if err != nil {
          return fmt.Errorf("top: %w", err)
       }
@@ -291,6 +323,102 @@ func rerender() error {
    return nil
 }
 
+func reformat() {
+/* for id, section := range(sections) {
+   if section.highestRev == 0 {
+      continue
+   }
+
+   fmt.Printf("found %d '%s' sections; latest revision %d\n", len(section.htmlnodes), id, section.highestRev)
+
+   for _, htmlnode := range(section.htmlnodes) {
+      // skip self
+      if htmlnode.node == section.highestNode {
+         continue
+      }
+
+      // skip uptodate sections
+      if htmlnode.rev == section.highestRev {
+         continue
+      }
+
+      htmlnode.update(section)
+   }
+}*/
+
+   // sections with same hash are updated with the same id
+   for _, sections := range(sectionsByHash) {
+      var shortestId string
+
+      // find shortest ID
+      for _, section := range(sections) {
+         if shortestId == "" || len(section.id) < len(shortestId) {
+            shortestId = section.id
+         }
+      }
+
+      for _, section := range(sections) {
+         if section.id != shortestId {
+            section.setId(shortestId)
+         }
+      }
+   }
+
+   // sections with different hash but same id are given unique id
+   for _, sections := range(sectionsById) {
+      firstHash := sections[0].newhash
+
+      for i := 1; i < len(sections); i++ {
+         if sections[i].newhash != firstHash {
+            newId := fmt.Sprintf("%s-%06d", sections[i].id, rand.Intn(1000000))
+            sections[i].setId(newId)
+         }
+      }
+   }
+
+   // force all files to be rerendered
+   dirty()
+}
+
+func mirror() error {
+   for id, sections := range(sectionsById) {
+      changed := []*Section{}
+
+      for _, section := range(sections) {
+         if section.oldhash != section.newhash {
+            changed = append(changed, section)
+         }
+      }
+
+      if len(changed) > 1 {
+         for i, section := range(sections) {
+            fmt.Printf("changed '%s' section %d/%d:\n", id, i, len(changed))
+            err := html.Render(os.Stdout, section.htmlnode)
+            if err != nil {
+               return fmt.Errorf("mirror: %w", err)
+            }
+         }
+
+again:
+         fmt.Printf("which section should be used? [1-%d]", len(changed))
+         var selection int
+         n, err := fmt.Fscanf(os.Stdin, "%d", &selection)
+         if n != 1 || err != nil {
+            goto again
+         }
+
+         changed = []*Section{changed[selection]}
+      }
+
+      // use changed[0]
+      for i := 1; i < len(sections); i++ {
+         sections[i].update(changed[0])
+      }
+   }
+
+   return nil
+}
+
 func main() {
    flag.Usage = func() {
       fmt.Fprintln(os.Stderr, "usage: xweb [option]")
@@ -305,31 +433,20 @@ func main() {
       os.Exit(1)
    }
 
-   if *reformat {
-      dirty()
+   // debug
+   for _, section := range(sectionsAll) {
+      fmt.Printf("%+v\n", *section)
    }
 
-/*   for id, section := range(sections) {
-      if section.highestRev == 0 {
-         continue
+   if *reformatFlag {
+      reformat()
+   } else {
+      err = mirror()
+      if err != nil {
+         fmt.Fprintf(os.Stderr, "%v\n", err)
+         os.Exit(1)
       }
-
-      fmt.Printf("found %d '%s' sections; latest revision %d\n", len(section.htmlnodes), id, section.highestRev)
-
-      for _, htmlnode := range(section.htmlnodes) {
-         // skip self
-         if htmlnode.node == section.highestNode {
-            continue
-         }
-
-         // skip uptodate sections
-         if htmlnode.rev == section.highestRev {
-            continue
-         }
-
-         htmlnode.update(section)
-      }
-   }*/
+   }
 
    err = rerender()
    if err != nil {
