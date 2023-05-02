@@ -36,7 +36,7 @@ type Section struct {
 }
 
 const (
-   CustomAttr = "data-revision"
+   HashAttr = "data-xweb"
 )
 
 var (
@@ -49,8 +49,8 @@ var (
       "footer" : struct{}{},
    }
 
-   // new
-   hashed map[uint64]*html.Node
+   byhash = map[uint64]*html.Node{}
+   byid   = map[string]*html.Node{}
 )
 
 func (dst *HTMLNode) update(src *Section) {
@@ -61,34 +61,78 @@ func (dst *HTMLNode) update(src *Section) {
    dst.node.Attr = src.highestNode.Attr
 }
 
-func hash(node *html.Node) (uint64, error) {
-   h := fnv.New64a()
-   err := html.Render(h, node)
-   if err != nil {
-      return 0, fmt.Errorf("hash: %w", err)
+// needed before computing hash
+func hashGetRemove(node *html.Node) (string, uint64, error) {
+   var id string
+   var hash uint64
+   var err error
+
+   for i := len(node.Attr)-1; i >= 0; i-- {
+      switch node.Attr[i].Key {
+      // skip removal
+      default:
+         continue
+      case HashAttr:
+      hash, err = strconv.ParseUint(node.Attr[i].Val, 16, 64)
+      if err != nil {
+         return "", 0, fmt.Errorf("hashGetRemove: malformed hash %s", node.Attr[i].Val)
+      }
+      case "id":
+         id = node.Attr[i].Val
+      }
+
+      node.Attr = append(node.Attr[:i], node.Attr[i+1:]...)
    }
 
-   return h.Sum64(), nil
+   return id, hash, nil
 }
 
-func build(htmlfile *HTMLFile, node *html.Node) {
+func hashUpdateChanged(node *html.Node) (bool, error) {
+   id, oldhash, err := hashGetRemove(node)
+   if err != nil {
+      return false, fmt.Errorf("hashAdd: %w", err)
+   }
+
+   h := fnv.New64a()
+   err = html.Render(h, node)
+   if err != nil {
+      return false, fmt.Errorf("hash: %w", err)
+   }
+
+   newhash := h.Sum64()
+   node.Attr = append(node.Attr,
+      html.Attribute{
+         Key: "id",
+         Val: id,
+      },
+   )
+   node.Attr = append(node.Attr,
+      html.Attribute{
+         Key: HashAttr,
+         Val: strconv.FormatUint(newhash, 16),
+      },
+   )
+
+   return newhash != oldhash, nil
+}
+
+func build(htmlfile *HTMLFile, node *html.Node) error {
    // check if interesting element
    _, ok := elements[node.Data]
 
    if node.Type == html.ElementNode && ok {
       // hash HTML node and store by hash
-      h, err := hash(node)
+      _, h, err := hashGetRemove(node) // FIXME
       if err != nil {
-         fmt.Fprintf(os.Stderr, "error: %v\n", err)
-         os.Exit(1)
+         return fmt.Errorf("build: %w", err)
       }
 
-      _, ok := hashed[h]
+      _, ok := byhash[h]
       if ok {
          fmt.Println("present")
       }
 
-      hashed[h] = node
+      byhash[h] = node
 
       // previous code
       name := node.Data
@@ -98,11 +142,11 @@ func build(htmlfile *HTMLFile, node *html.Node) {
          switch attr.Key {
          case "id":
             name += ":" + attr.Val
-         case CustomAttr:
+         case HashAttr:
             var err error
             rev, err = strconv.Atoi(attr.Val)
             if err != nil {
-               fmt.Fprintf(os.Stderr, "error: malformed %s value '%s'\n", CustomAttr, attr.Val)
+               fmt.Fprintf(os.Stderr, "error: malformed %s value '%s'\n", HashAttr, attr.Val)
                os.Exit(1)
             }
             pos = i
@@ -138,8 +182,13 @@ func build(htmlfile *HTMLFile, node *html.Node) {
    }
 
    for child := node.FirstChild; child != nil; child = child.NextSibling {
-		build(htmlfile, child)
+		err := build(htmlfile, child)
+      if err != nil {
+         return err
+      }
 	}
+
+   return nil
 }
 
 func parse(path string) error {
@@ -182,11 +231,11 @@ func (htmlfile *HTMLFile) render() error {
    return nil
 }
 
-func top() error {
+func recurse() error {
    err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
       if err != nil {
          fmt.Fprintf(os.Stderr, "warning: unable to open %s", path)
-         return fmt.Errorf("top: %w:", err)
+         return fmt.Errorf("recurse: %w:", err)
       }
 
       if !strings.HasSuffix(path, ".html") {
@@ -195,29 +244,72 @@ func top() error {
 
       err = parse(path)
       if err != nil {
-         return fmt.Errorf("top: %w", err)
+         return fmt.Errorf("recurse: %w", err)
       }
 
       return nil
    })
 
-   if *reformat {
-      for _, htmlfile := range(htmlfiles) {
-         err = htmlfile.render()
-         if err != nil {
-            return fmt.Errorf("top: %w", err)
-         }
-      }
-
-      return nil
-   }
-
    // avoid loop variable aliasing
    for i := range(htmlfiles) {
-      build(&htmlfiles[i], htmlfiles[i].tree)
+      err = build(&htmlfiles[i], htmlfiles[i].tree)
+      if err != nil {
+         return fmt.Errorf("top: %w", err)
+      }
    }
 
-   for id, section := range(sections) {
+   return nil
+}
+
+func dirty() {
+   for _, htmlfile := range(htmlfiles) {
+      htmlfile.modified = true
+   }
+}
+
+func rerender() error {
+   var wrote []string
+
+   // rerender modified files
+   for _, htmlfile := range(htmlfiles) {
+      if !htmlfile.modified {
+         continue
+      }
+
+      err := htmlfile.render()
+      if err != nil {
+         return fmt.Errorf("rerender: %w", err)
+      }
+
+      wrote = append(wrote, htmlfile.name)
+   }
+
+   if len(wrote) > 0 {
+      fmt.Printf("updated: %s\n", strings.Join(wrote, " "))
+   }
+
+   return nil
+}
+
+func main() {
+   flag.Usage = func() {
+      fmt.Fprintln(os.Stderr, "usage: xweb [option]")
+      flag.PrintDefaults()
+   }
+
+   flag.Parse()
+
+   err := recurse()
+   if err != nil {
+      fmt.Fprintf(os.Stderr, "%v\n", err)
+      os.Exit(1)
+   }
+
+   if *reformat {
+      dirty()
+   }
+
+/*   for id, section := range(sections) {
       if section.highestRev == 0 {
          continue
       }
@@ -237,40 +329,9 @@ func top() error {
 
          htmlnode.update(section)
       }
-   }
+   }*/
 
-   var wrote []string
-
-   // rerender modified files
-   for _, htmlfile := range(htmlfiles) {
-      if !htmlfile.modified {
-         continue
-      }
-
-      err = htmlfile.render()
-      if err != nil {
-         return fmt.Errorf("top: %w", err)
-      }
-
-      wrote = append(wrote, htmlfile.name)
-   }
-
-   if len(wrote) > 0 {
-      fmt.Printf("updated: %s\n", strings.Join(wrote, " "))
-   }
-
-   return err
-}
-
-func main() {
-   flag.Usage = func() {
-      fmt.Fprintln(os.Stderr, "usage: xweb [option]")
-      flag.PrintDefaults()
-   }
-
-   flag.Parse()
-
-   err := top()
+   err = rerender()
    if err != nil {
       fmt.Fprintf(os.Stderr, "%v\n", err)
       os.Exit(1)

@@ -1,12 +1,12 @@
 WORKFLOW
-- user runs xweb first with '--init' flag
+- user runs xweb first with '-reformat' flag
  > it traverses all HTML files recursively, identifying HTML section, header and footer elements ('sections')
- > it reflows all HTML
- > builds a list of sections
- > sections which are identical are updated with the same id
- > sections which are different are given a unique id
+ > builds a global list of sections
+ > a "data-xweb" hash attrbute is added to each section (id and hash are skipped during hash calculation)
+ > sections with same hash are updated with the same id
+ > sections with different hash but same id are given unique id
  > a list of sections ids is shown across all files
- > a data-hash attrbute is added to each
+ > all HTML files are rewritten
 
 - user updates sections in HTML and runs 'xweb' to update all sections
  > it traverses all HTML files recursively, identifying HTML section elements
