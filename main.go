@@ -42,7 +42,7 @@ var (
       "footer" : struct{}{},
    }
    sectionsByHash = map[uint64][]*Section{}
-   sectionsById   = map[string][]*Section{}
+   sectionsByID   = map[string][]*Section{}
 )
 
 func (dst *Section) update(src *Section) {
@@ -53,8 +53,12 @@ func (dst *Section) update(src *Section) {
    dst.htmlnode.Attr = src.htmlnode.Attr
 }
 
+func randID() string {
+   return fmt.Sprintf("%06d", rand.Intn(1000000))
+}
+
 // needed before computing hash
-func hashGetRemove(node *html.Node) (string, uint64, error) {
+func hashIdGetRemove(node *html.Node) (string, uint64, error) {
    var id string
    var hash uint64
    var err error
@@ -80,15 +84,19 @@ func hashGetRemove(node *html.Node) (string, uint64, error) {
 }
 
 // hash and id must be removed previously
-func hashGetAdd(node *html.Node, id string) (uint64, error) {
+func hashCompute(node *html.Node) (uint64, error) {
    h := fnv.New64a()
    err := html.Render(h, node)
    if err != nil {
       return 0, fmt.Errorf("hash: %w", err)
    }
 
-   hash := h.Sum64()
-   node.Attr = append(node.Attr,
+   return h.Sum64(), nil
+}
+
+func hashIDAdd(node *html.Node, hash uint64, id string) {
+   // id and hash as first attributes
+   node.Attr = append([]html.Attribute{
       html.Attribute{
          Key: "id",
          Val: id,
@@ -96,13 +104,16 @@ func hashGetAdd(node *html.Node, id string) (uint64, error) {
       html.Attribute{
          Key: HashAttr,
          Val: strconv.FormatUint(hash, 16),
-      },
+      }},
+      node.Attr...,
    )
-
-   return hash, nil
 }
 
-func (s *Section) setId(id string) {
+func (s *Section) setID(id string) {
+   if id == "" {
+      panic("null ID")
+   }
+
    s.id = id
    s.htmlfile.modified = true
 
@@ -129,15 +140,21 @@ func build(htmlfile *HTMLFile, node *html.Node) error {
 
    if node.Type == html.ElementNode && ok {
       // hash HTML node and store by hash
-      id, oldhash, err := hashGetRemove(node)
+      id, oldhash, err := hashIdGetRemove(node)
       if err != nil {
          return fmt.Errorf("build: %w", err)
       }
 
-      newhash, err := hashGetAdd(node, id)
+      newhash, err := hashCompute(node)
       if err != nil {
          return fmt.Errorf("build: %w", err)
       }
+
+      if id == "" {
+         id = strconv.FormatUint(newhash, 16)
+      }
+
+      hashIDAdd(node, newhash, id)
 
       // must update hash
       if newhash != oldhash {
@@ -156,9 +173,9 @@ func build(htmlfile *HTMLFile, node *html.Node) error {
       sections = append(sections, &section)
       sectionsByHash[oldhash] = sections
 
-      sections = sectionsById[id]
+      sections = sectionsByID[id]
       sections = append(sections, &section)
-      sectionsById[id] = sections
+      sectionsByID[id] = sections
    }
 
    for child := node.FirstChild; child != nil; child = child.NextSibling {
@@ -275,30 +292,30 @@ func rerender() error {
 func reformat() {
    // sections with same hash are updated with the same id
    for _, sections := range(sectionsByHash) {
-      var shortestId string
+      var shortestID string
 
       // find shortest ID
       for _, section := range(sections) {
-         if shortestId == "" || len(section.id) < len(shortestId) {
-            shortestId = section.id
+         if shortestID == "" || len(section.id) < len(shortestID) {
+            shortestID = section.id
          }
       }
 
       for _, section := range(sections) {
-         if section.id != shortestId {
-            section.setId(shortestId)
+         if section.id != shortestID {
+            section.setID(shortestID)
          }
       }
    }
 
    // sections with different hash but same id are given unique id
-   for _, sections := range(sectionsById) {
+   for _, sections := range(sectionsByID) {
       firstHash := sections[0].newhash
 
       for i := 1; i < len(sections); i++ {
          if sections[i].newhash != firstHash {
-            newId := fmt.Sprintf("%s-%06d", sections[i].id, rand.Intn(1000000))
-            sections[i].setId(newId)
+            newId := sections[i].id + "-" + randID()
+            sections[i].setID(newId)
          }
       }
    }
@@ -308,7 +325,7 @@ func reformat() {
 }
 
 func mirror() error {
-   for id, sections := range(sectionsById) {
+   for id, sections := range(sectionsByID) {
       changed := []*Section{}
 
       for _, section := range(sections) {
