@@ -31,6 +31,10 @@ type Section struct {
 
 const (
    HashAttr = "data-xweb"
+   normal   = "\033[0m"
+   blue     = "\033[94m"
+   red      = "\033[31m"
+   yellow   = "\033[33m"
 )
 
 var (
@@ -340,7 +344,7 @@ func mirror() error {
 
       if len(changed) > 1 {
          for i, section := range(changed) {
-            fmt.Printf("-- changed '%s' section %d/%d ------------\n\n", id, i, len(changed)-1)
+            fmt.Printf(red+"-- changed '%s' section %d/%d ------------"+normal+"\n\n", id, i, len(changed)-1)
             err := html.Render(os.Stdout, section.htmlnode)
             if err != nil {
                return fmt.Errorf("mirror: %w", err)
@@ -348,9 +352,8 @@ func mirror() error {
 
             fmt.Println("\n")
          }
-
 again:
-         fmt.Printf("-- which section 0-%d should be used? ", len(changed)-1)
+         fmt.Printf(red+"-- which section 0-%d should be used? "+normal, len(changed)-1)
          var selection int
          n, err := fmt.Fscanf(os.Stdin, "%d", &selection)
          if n != 1 || err != nil || selection < 0 || selection > (len(changed)-1) {
