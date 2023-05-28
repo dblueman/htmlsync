@@ -38,9 +38,10 @@ const (
 )
 
 var (
-   reformatFlag = flag.Bool("reformat", false, "reformat HTML files")
-   htmlfiles = []*HTMLFile{}
-   elements  = map[string]struct{}{
+   reformatFlag   = flag.Bool("reformat", false, "reformat HTML files")
+   dumpFlag       = flag.Bool("dump", false, "show parsed state")
+   htmlfiles      = []*HTMLFile{}
+   elements       = map[string]struct{}{
       "section": struct{}{},
       "header" : struct{}{},
       "footer" : struct{}{},
@@ -263,6 +264,26 @@ func recurse() error {
    return nil
 }
 
+func dump() {
+   fmt.Println("sections by hash:")
+
+   for hash, val := range sectionsByHash {
+      fmt.Printf("hash %016X: %+v\n", hash, val)
+   }
+
+   fmt.Println("sections by ID:")
+
+   for id, val := range sectionsByID {
+      fmt.Printf("id %s: %+v\n", id, val)
+   }
+
+   fmt.Println("HTML files:")
+
+   for _, htmlfile := range htmlfiles {
+      fmt.Printf("htmlfile %v\n", htmlfile)
+   }
+}
+
 func dirty() {
    for _, htmlfile := range(htmlfiles) {
       htmlfile.modified = true
@@ -408,6 +429,11 @@ func main() {
    if err != nil {
       fmt.Fprintf(os.Stderr, "%v\n", err)
       os.Exit(1)
+   }
+
+   if *dumpFlag {
+      dump()
+      os.Exit(0)
    }
 
    if *reformatFlag {
