@@ -296,18 +296,26 @@ func rerender() error {
 func reformat() {
    // sections with same hash are updated with the same id
    for _, sections := range(sectionsByHash) {
-      var shortestID string
+      ids := map[string]struct{}{}
 
-      // find shortest ID
       for _, section := range(sections) {
-         if shortestID == "" || len(section.id) < len(shortestID) {
-            shortestID = section.id
-         }
+         ids[section.id] = struct{}{}
+      }
+
+      if len(ids) == 1 {
+         continue
+      }
+again:
+      fmt.Printf(red+"which ID should be used? "+normal)
+      var selection string
+      n, err := fmt.Fscanf(os.Stdin, "%s", &selection)
+      if n != 1 || err != nil || selection == "" {
+         goto again
       }
 
       for _, section := range(sections) {
-         if section.id != shortestID {
-            section.setID(shortestID)
+         if section.id != selection {
+            section.setID(selection)
          }
       }
    }
@@ -318,8 +326,8 @@ func reformat() {
 
       for i := 1; i < len(sections); i++ {
          if sections[i].newhash != firstHash {
-            newId := sections[i].id + "-" + randID()
-            sections[i].setID(newId)
+            newID := sections[i].id + "-" + randID()
+            sections[i].setID(newID)
          }
       }
    }
@@ -330,16 +338,22 @@ func reformat() {
 
 func mirror() error {
    for id, sections := range(sectionsByID) {
-      changed := []*Section{}
+      hashes := map[uint64]*Section{}
 
       for _, section := range(sections) {
          if section.oldhash != section.newhash {
-            changed = append(changed, section)
+            hashes[section.newhash] = section
          }
       }
 
-      if len(changed) == 0 {
+      if len(hashes) == 0 {
          continue
+      }
+
+      changed := []*Section{}
+
+      for _, val := range hashes {
+         changed = append(changed, val)
       }
 
       if len(changed) > 1 {
