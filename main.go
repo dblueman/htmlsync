@@ -336,13 +336,21 @@ again:
    dirty()
 }
 
+type Ent struct {
+   section *Section
+   count   int
+}
+
 func mirror() error {
    for id, sections := range(sectionsByID) {
-      hashes := map[uint64]*Section{}
+      hashes := map[uint64]Ent{}
 
       for _, section := range(sections) {
          if section.oldhash != section.newhash {
-            hashes[section.newhash] = section
+            ent := hashes[section.newhash]
+            ent.section = section
+            ent.count++
+            hashes[section.newhash] = ent
          }
       }
 
@@ -350,16 +358,16 @@ func mirror() error {
          continue
       }
 
-      changed := []*Section{}
+      changed := []Ent{}
 
       for _, val := range hashes {
          changed = append(changed, val)
       }
 
       if len(changed) > 1 {
-         for i, section := range(changed) {
-            fmt.Printf(red+"-- changed '%s' section %d/%d ------------"+normal+"\n\n", id, i, len(changed)-1)
-            err := html.Render(os.Stdout, section.htmlnode)
+         for i, ent := range(changed) {
+            fmt.Printf(red+"-- changed '%s' section %d/%d (%d instances) ------------"+normal+"\n\n", id, i, len(changed)-1, ent.count)
+            err := html.Render(os.Stdout, ent.section.htmlnode)
             if err != nil {
                return fmt.Errorf("mirror: %w", err)
             }
@@ -374,12 +382,14 @@ again:
             goto again
          }
 
-         changed = []*Section{changed[selection]}
+         changed = []Ent{
+            {section: changed[selection].section},
+         }
       }
 
       // use changed[0]
       for i := 1; i < len(sections); i++ {
-         sections[i].update(changed[0])
+         sections[i].update(changed[0].section)
       }
    }
 
