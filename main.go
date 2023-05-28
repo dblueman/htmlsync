@@ -38,8 +38,9 @@ const (
 )
 
 var (
-   reformatFlag   = flag.Bool("reformat", false, "reformat HTML files")
    dumpFlag       = flag.Bool("dump", false, "show parsed state")
+   recurseFlag    = flag.Bool("recurse", false, "descend subdirectories")
+   reformatFlag   = flag.Bool("reformat", false, "reformat HTML files")
    htmlfiles      = []*HTMLFile{}
    elements       = map[string]struct{}{
       "section": struct{}{},
@@ -138,7 +139,8 @@ func (s *Section) setID(id string) {
 
 func build(htmlfile *HTMLFile, node *html.Node) error {
    // add to HMTLfile list for dirtying
-   htmlfiles = append(htmlfiles, htmlfile)
+   // FIXME already added when parsed, no?
+//   htmlfiles = append(htmlfiles, htmlfile)
 
    // check if interesting element
    _, ok := elements[node.Data]
@@ -235,7 +237,7 @@ func (htmlfile *HTMLFile) render() error {
 }
 
 func recurse() error {
-   err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+   err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
       if err != nil {
          fmt.Fprintf(os.Stderr, "warning: unable to open %s", path)
          return fmt.Errorf("recurse: %w", err)
@@ -253,11 +255,32 @@ func recurse() error {
       return nil
    })
 
-   // avoid loop variable aliasing
-   for i := range(htmlfiles) {
-      err = build(htmlfiles[i], htmlfiles[i].tree)
+   if err != nil {
+      return fmt.Errorf("recurse: %w", err)
+   }
+
+   return nil
+}
+
+func flat() error {
+   files, err := os.ReadDir(".")
+   if err != nil {
+      return fmt.Errorf("flat: %w", err)
+   }
+
+   for _, file := range files {
+      if file.IsDir() {
+         continue
+      }
+
+      fname := file.Name()
+      if !strings.HasSuffix(fname, ".html") {
+         continue
+      }
+
+      err = parse(fname)
       if err != nil {
-         return fmt.Errorf("top: %w", err)
+         return fmt.Errorf("flat: %w", err)
       }
    }
 
@@ -425,10 +448,25 @@ func main() {
 
    flag.Parse()
 
-   err := recurse()
+   var err error
+   if *recurseFlag {
+      err = recurse()
+   } else {
+      err = flat()
+   }
+
    if err != nil {
       fmt.Fprintf(os.Stderr, "%v\n", err)
       os.Exit(1)
+   }
+
+   // avoid loop variable aliasing
+   for i := range(htmlfiles) {
+      err = build(htmlfiles[i], htmlfiles[i].tree)
+      if err != nil {
+         fmt.Fprintf(os.Stderr, "%v\n", err)
+         os.Exit(1)
+      }
    }
 
    if *dumpFlag {
