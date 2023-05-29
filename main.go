@@ -7,6 +7,7 @@ import (
    "io"
    "math/rand"
    "os"
+   "os/exec"
    "path/filepath"
    "strconv"
    "strings"
@@ -29,6 +30,11 @@ type Section struct {
    htmlfile *HTMLFile
 }
 
+type Ent struct {
+   section *Section
+   count   int
+}
+
 const (
    HashAttr = "data-xweb"
    normal   = "\033[0m"
@@ -49,6 +55,7 @@ var (
    }
    sectionsByHash = map[uint64][]*Section{}
    sectionsByID   = map[string][]*Section{}
+   tmpFiles       = map[string]struct{}{}
 )
 
 func (dst *Section) update(src *Section) {
@@ -274,7 +281,7 @@ func flat() error {
       }
 
       fname := file.Name()
-      if !strings.HasSuffix(fname, ".html") {
+      if !strings.HasSuffix(fname, ".html") || strings.HasPrefix(fname, ".") {
          continue
       }
 
@@ -290,20 +297,32 @@ func flat() error {
 func dump() {
    fmt.Println("sections by hash:")
 
-   for hash, val := range sectionsByHash {
-      fmt.Printf("hash %016X: %+v\n", hash, val)
+   for hash, sections := range sectionsByHash {
+      fmt.Printf("%016x (%d):", hash, len(sections))
+
+      for _, section := range sections {
+         fmt.Printf(" ID%016x,OH%016x,NH%016xv", section.id, section.oldhash, section.newhash)
+      }
+
+      fmt.Println()
    }
 
-   fmt.Println("sections by ID:")
+   fmt.Println("\nsections by ID:")
 
-   for id, val := range sectionsByID {
-      fmt.Printf("id %s: %+v\n", id, val)
+   for id, sections := range sectionsByID {
+      fmt.Printf("%16s (%d):", id, len(sections))
+
+      for _, section := range sections {
+         fmt.Printf(" ID%016x,OH%016x,NH%016xv", section.id, section.oldhash, section.newhash)
+      }
+
+      fmt.Println()
    }
 
-   fmt.Println("HTML files:")
+   fmt.Println("\nHTML files:")
 
    for _, htmlfile := range htmlfiles {
-      fmt.Printf("htmlfile %v\n", htmlfile)
+      fmt.Printf("modified=%v %s\n", htmlfile.modified, htmlfile.name)
    }
 }
 
@@ -380,22 +399,47 @@ again:
    dirty()
 }
 
-type Ent struct {
-   section *Section
-   count   int
+func browser(i int, htmlnode *html.Node) error {
+   fname := fmt.Sprintf(".xweb-%d.html", i)
+   f, err := os.OpenFile(fname, os.O_CREATE | os.O_TRUNC | os.O_WRONLY, 0o660)
+   if err != nil {
+      return fmt.Errorf("browser: %w", err)
+   }
+
+   defer f.Close()
+   tmpFiles[fname] = struct{}{}
+
+   err = html.Render(f, htmlnode)
+   if err != nil {
+      return fmt.Errorf("browser: %w", err)
+   }
+
+   cmd := exec.Command("xdg-open", fname)
+   err = cmd.Run()
+   if err != nil {
+      return fmt.Errorf("browser: %w", err)
+   }
+
+   return nil
 }
 
-func mirror() error {
+func cleanup() {
+   for fname := range tmpFiles {
+      os.Remove(fname)
+   }
+}
+
+func reconcile() error {
+   defer cleanup()
+
    for id, sections := range(sectionsByID) {
       hashes := map[uint64]Ent{}
 
       for _, section := range(sections) {
-         if section.oldhash != section.newhash {
-            ent := hashes[section.newhash]
-            ent.section = section
-            ent.count++
-            hashes[section.newhash] = ent
-         }
+         ent := hashes[section.newhash]
+         ent.section = section
+         ent.count++
+         hashes[section.newhash] = ent
       }
 
       if len(hashes) == 0 {
@@ -413,17 +457,26 @@ func mirror() error {
             fmt.Printf(red+"-- changed '%s' section %d/%d (%d instances) ------------"+normal+"\n\n", id, i, len(changed)-1, ent.count)
             err := html.Render(os.Stdout, ent.section.htmlnode)
             if err != nil {
-               return fmt.Errorf("mirror: %w", err)
+               return fmt.Errorf("reconcile: %w", err)
+            }
+
+            err = browser(i, ent.section.htmlnode)
+            if err != nil {
+               return fmt.Errorf("reconcile: %w", err)
             }
 
             fmt.Println("\n")
          }
 again:
-         fmt.Printf(red+"-- which section 0-%d should be used? "+normal, len(changed)-1)
+         fmt.Printf(red+"-- for section '%s' which instance 0-%d (-1 quit)? "+normal, id, len(changed)-1)
          var selection int
          n, err := fmt.Fscanf(os.Stdin, "%d", &selection)
-         if n != 1 || err != nil || selection < 0 || selection > (len(changed)-1) {
+         if n != 1 || err != nil || selection < -1 || selection > (len(changed)-1) {
             goto again
+         }
+
+         if selection == -1 {
+            break
          }
 
          changed = []Ent{
@@ -477,7 +530,7 @@ func main() {
    if *reformatFlag {
       reformat()
    } else {
-      err = mirror()
+      err = reconcile()
       if err != nil {
          fmt.Fprintf(os.Stderr, "%v\n", err)
          os.Exit(1)
