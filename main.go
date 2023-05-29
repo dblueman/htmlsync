@@ -47,6 +47,7 @@ var (
    dumpFlag       = flag.Bool("dump", false, "show parsed state")
    recurseFlag    = flag.Bool("recurse", false, "descend subdirectories")
    reformatFlag   = flag.Bool("reformat", false, "reformat HTML files")
+   nobrowserFlag  = flag.Bool("nobrowser", false, "don't open browser for section choices")
    htmlfiles      = []*HTMLFile{}
    elements       = map[string]struct{}{
       "section": struct{}{},
@@ -294,6 +295,10 @@ func flat() error {
    return nil
 }
 
+func (s *Section) dump() {
+   fmt.Printf(" ID%s,OH%016x,NH%016x", s.id, s.oldhash, s.newhash)
+}
+
 func dump() {
    fmt.Println("sections by hash:")
 
@@ -301,7 +306,7 @@ func dump() {
       fmt.Printf("%016x (%d):", hash, len(sections))
 
       for _, section := range sections {
-         fmt.Printf(" ID%016x,OH%016x,NH%016xv", section.id, section.oldhash, section.newhash)
+         section.dump()
       }
 
       fmt.Println()
@@ -313,7 +318,7 @@ func dump() {
       fmt.Printf("%16s (%d):", id, len(sections))
 
       for _, section := range sections {
-         fmt.Printf(" ID%016x,OH%016x,NH%016xv", section.id, section.oldhash, section.newhash)
+         section.dump()
       }
 
       fmt.Println()
@@ -432,61 +437,70 @@ func cleanup() {
 func reconcile() error {
    defer cleanup()
 
+   // for each section, if more than one hash, ask user to choose one
    for id, sections := range(sectionsByID) {
       hashes := map[uint64]Ent{}
 
+      // build map of unique hashes
       for _, section := range(sections) {
          ent := hashes[section.newhash]
-         ent.section = section
+         ent.section = section // overwrites but by definition, same content
          ent.count++
          hashes[section.newhash] = ent
       }
 
-      if len(hashes) == 0 {
+      // skip where no unique choices
+      if len(hashes) < 2 {
          continue
       }
 
-      changed := []Ent{}
-
+      hashes2 := []Ent{}
       for _, val := range hashes {
-         changed = append(changed, val)
+         hashes2 = append(hashes2, val)
       }
 
-      if len(changed) > 1 {
-         for i, ent := range(changed) {
-            fmt.Printf(red+"-- changed '%s' section %d/%d (%d instances) ------------"+normal+"\n\n", id, i, len(changed)-1, ent.count)
-            err := html.Render(os.Stdout, ent.section.htmlnode)
-            if err != nil {
-               return fmt.Errorf("reconcile: %w", err)
-            }
+      for i, ent := range(hashes2) {
+         fmt.Printf(red+"-- changed '%s' section %d/%d (%d instances) ------------"+normal+"\n\n", id, i, len(hashes2)-1, ent.count)
 
+         err := html.Render(os.Stdout, ent.section.htmlnode)
+         if err != nil {
+            return fmt.Errorf("reconcile: %w", err)
+         }
+
+         if !*nobrowserFlag {
             err = browser(i, ent.section.htmlnode)
             if err != nil {
                return fmt.Errorf("reconcile: %w", err)
             }
-
-            fmt.Println("\n")
          }
+
+         fmt.Println("\n")
+      }
 again:
-         fmt.Printf(red+"-- for section '%s' which instance 0-%d (-1 quit)? "+normal, id, len(changed)-1)
-         var selection int
-         n, err := fmt.Fscanf(os.Stdin, "%d", &selection)
-         if n != 1 || err != nil || selection < -1 || selection > (len(changed)-1) {
-            goto again
-         }
-
-         if selection == -1 {
-            break
-         }
-
-         changed = []Ent{
-            {section: changed[selection].section},
-         }
+      fmt.Printf(red+"-- for section '%s' which instance 0-%d,c,q? "+normal, id, len(hashes2)-1)
+      var selection string
+      n, err := fmt.Fscanf(os.Stdin, "%s", &selection)
+      if err != nil || n != 1 {
+         goto again
       }
 
-      // use changed[0]
-      for i := 1; i < len(sections); i++ {
-         sections[i].update(changed[0].section)
+      switch selection {
+      case "c":
+         continue
+      case "q":
+         break
+      }
+
+      n, err = strconv.Atoi(selection)
+      if err != nil || n < 0 || n > (len(hashes2)-1) {
+         goto again
+      }
+
+      selected := hashes2[n].section
+
+      // update all instances
+      for _, section := range(sections) {
+         section.update(selected)
       }
    }
 
