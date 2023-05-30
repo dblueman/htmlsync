@@ -44,12 +44,12 @@ const (
 )
 
 var (
-   dumpFlag       = flag.Bool("dump", false, "show parsed state")
-   recurseFlag    = flag.Bool("recurse", false, "descend subdirectories")
-   reformatFlag   = flag.Bool("reformat", false, "reformat HTML files")
-   nobrowserFlag  = flag.Bool("nobrowser", false, "don't open browser for section choices")
-   htmlfiles      = []*HTMLFile{}
-   elements       = map[string]struct{}{
+   dumpFlag     = flag.Bool("dump", false, "show parsed state")
+   recurseFlag  = flag.Bool("recurse", false, "descend subdirectories")
+   reformatFlag = flag.Bool("reformat", false, "reformat HTML files")
+   browserFlag  = flag.Bool("browser", false, "open browser for section choices")
+   htmlfiles    = []*HTMLFile{}
+   elements     = map[string]struct{}{
       "section": struct{}{},
       "header" : struct{}{},
       "footer" : struct{}{},
@@ -467,14 +467,14 @@ func reconcile() error {
             return fmt.Errorf("reconcile: %w", err)
          }
 
-         if !*nobrowserFlag {
+         if *browserFlag {
             err = browser(i, ent.section.htmlnode)
             if err != nil {
                return fmt.Errorf("reconcile: %w", err)
             }
          }
 
-         fmt.Println("\n")
+         fmt.Print("\n\n")
       }
 again:
       fmt.Printf(red+"-- for section '%s' which instance 0-%d,c,q? "+normal, id, len(hashes2)-1)
