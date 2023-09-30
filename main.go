@@ -36,7 +36,7 @@ type Ent struct {
 }
 
 const (
-   HashAttr = "data-xweb"
+   HashAttr = "data-htmlsync"
    normal   = "\033[0m"
    blue     = "\033[94m"
    red      = "\033[31m"
@@ -405,7 +405,7 @@ again:
 }
 
 func browser(i int, htmlnode *html.Node) error {
-   fname := fmt.Sprintf(".xweb-%d.html", i)
+   fname := fmt.Sprintf(".htmlsync-%d.html", i)
    f, err := os.OpenFile(fname, os.O_CREATE | os.O_TRUNC | os.O_WRONLY, 0o660)
    if err != nil {
       return fmt.Errorf("browser: %w", err)
@@ -509,7 +509,7 @@ again:
 
 func main() {
    flag.Usage = func() {
-      fmt.Fprintln(os.Stderr, "usage: xweb [option]")
+      fmt.Fprintln(os.Stderr, "usage: htmlsync [option]")
       flag.PrintDefaults()
    }
 
